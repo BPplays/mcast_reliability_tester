@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use etherparse::{PacketHeaders, IpHeader, TransportHeader};
-use pcap::PcapReader;
+use etherparse::PacketHeaders;
+use pcap::Capture;
 use std::path::PathBuf;
-use std::time::{Duration, UNIX_EPOCH};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Multicast RA Reliability Tester")]
@@ -24,42 +23,28 @@ struct Args {
 #[derive(Debug, Clone)]
 struct RaPacket {
     timestamp_ns: u64,
-    // We can add more identifiers here if needed, e.g., sequence numbers if present
 }
 
 fn get_ra_packets(path: &PathBuf) -> Result<Vec<RaPacket>> {
-    let mut cap = PcapReader::open(path).with_context(|| format!("Failed to open pcap {:?}", path))?;
+    let mut cap = Capture::from_file(path).with_context(|| format!("Failed to open pcap {:?}", path))?;
     let mut packets = Vec::new();
 
     while let Ok(packet) = cap.next_packet() {
         let ts = packet.header.ts;
         let timestamp_ns = (ts.tv_sec as u64 * 1_000_000_000) + (ts.tv_usec as u64 * 1_000);
 
-        // Parse packet
         if let Ok(headers) = PacketHeaders::from_ethernet_slice(&packet.data) {
-            if let Some(ip) = headers.ip {
-                if let Some(ip_header) = ip {
-                    // Check for IPv6 and Multicast Destination (ff02::1)
-                    // For simplicity in this implementation, we check if it's ICMPv6 Type 134
-                    if let Some(transport) = headers.transport {
-                        if let TransportHeader::Icmpv6(icmpv6) = transport {
-                            // ICMPv6 Type 134 is Router Advertisement
-                            // Note: etherparse might not have the full ICMPv6 type in the enum
-                            // but we can check the raw data if needed.
-                        }
+            if headers.net.is_some() {
+                // The packet data usually includes the Ethernet header (14 bytes).
+                // IPv6 header follows (40 bytes).
+                // ICMPv6 Type is the first byte of the ICMPv6 header.
+                // Total offset: 14 + 40 = 54.
+                if packet.data.len() > 55 && packet.data[12] == 0x86 && packet.data[13] == 0xdd {
+                    // Byte 12-13 is EtherType. 0x86dd is IPv6.
+                    if packet.data[54] == 134 {
+                        packets.push(RaPacket { timestamp_ns });
                     }
                 }
-            }
-        }
-        
-        // Since etherparse's ICMPv6 support might be limited in version 0.19,
-        // we can manually check the bytes for ICMPv6 Type 134.
-        // IPv6 header is 40 bytes. ICMPv6 type is at offset 40.
-        if packet.data.len() > 41 && packet.data[0] == 0x6 /* IPv6 version */ {
-            // Check if destination is multicast ff02::1 (simplified check)
-            // and check if the byte at offset 40 is 134 (0x86)
-            if packet.data[40] == 134 {
-                packets.push(RaPacket { timestamp_ns });
             }
         }
     }

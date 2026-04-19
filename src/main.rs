@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use etherparse::PacketHeaders;
-use pcap::Capture;
+use pcap_parser::{create_reader, PcapBlockOwned, Block};
+use std::fs::File;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -26,25 +26,45 @@ struct RaPacket {
 }
 
 fn get_ra_packets(path: &PathBuf) -> Result<Vec<RaPacket>> {
-    let mut cap = Capture::from_file(path).with_context(|| format!("Failed to open pcap {:?}", path))?;
+    let file = File::open(path).with_context(|| format!("Failed to open file {:?}", path))?;
+    let mut reader = create_reader(65536, file)
+        .with_context(|| format!("Failed to create reader for {:?}", path))?;
+
     let mut packets = Vec::new();
 
-    while let Ok(packet) = cap.next_packet() {
-        let ts = packet.header.ts;
-        let timestamp_ns = (ts.tv_sec as u64 * 1_000_000_000) + (ts.tv_usec as u64 * 1_000);
+    loop {
+        match reader.next() {
+            Ok((_offset, block)) => {
+                let (data, ts_ns) = match block {
+                    PcapBlockOwned::Legacy(legacy_block) => {
+                        let ns = (legacy_block.ts_sec as u64 * 1_000_000_000) + (legacy_block.ts_usec as u64 * 1_000);
+                        (legacy_block.data, ns)
+                    }
+                    PcapBlockOwned::NG(ng_block) => {
+                        if let Block::EnhancedPacket(epb) = ng_block {
+                            let ns = (epb.ts_high as u64 * 1_000_000_000) + (epb.ts_low as u64);
+                            (epb.data, ns)
+                        } else {
+                            continue;
+                        }
+                    }
+                    _ => continue,
+                };
 
-        if let Ok(headers) = PacketHeaders::from_ethernet_slice(&packet.data) {
-            if headers.net.is_some() {
                 // The packet data usually includes the Ethernet header (14 bytes).
                 // IPv6 header follows (40 bytes).
                 // ICMPv6 Type is the first byte of the ICMPv6 header.
                 // Total offset: 14 + 40 = 54.
-                if packet.data.len() > 55 && packet.data[12] == 0x86 && packet.data[13] == 0xdd {
-                    // Byte 12-13 is EtherType. 0x86dd is IPv6.
-                    if packet.data[54] == 134 {
-                        packets.push(RaPacket { timestamp_ns });
+                if data.len() > 55 && data[12] == 0x86 && data[13] == 0xdd {
+                    if data[54] == 134 {
+                       packets.push(RaPacket { timestamp_ns: ts_ns });
                     }
                 }
+            }
+            Err(e) => {
+                println!("error reading: {}", e);
+                // break on EOF or errors
+                break;
             }
         }
     }
@@ -54,8 +74,10 @@ fn get_ra_packets(path: &PathBuf) -> Result<Vec<RaPacket>> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    println!("start get ra");
     let router_packets = get_ra_packets(&args.router_pcap)?;
     let device_packets = get_ra_packets(&args.device_pcap)?;
+    println!("finished get ra");
 
     if router_packets.is_empty() || device_packets.is_empty() {
         anyhow::bail!("No RA packets found in one or both files");
@@ -89,7 +111,7 @@ fn main() -> Result<()> {
     println!("  Start: {} ns", start_window);
     println!("  End:   {} ns", end_window);
     println!("  Duration: {} ms", (end_window - start_window) / 1_000_000);
-    println!("-------------------------------------------------");
+    println!("-------------------------------------------------------");
 
     let total_sent = filtered_router.len();
     let mut received_count = 0;

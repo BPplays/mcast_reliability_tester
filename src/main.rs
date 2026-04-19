@@ -20,6 +20,10 @@ struct Args {
     /// Margin in milliseconds around the start and end times to avoid miscounting
     #[arg(short, long, default_value = "1000")]
     margin: u64,
+
+    /// RA Lifetime in seconds
+    #[arg(short, long)]
+    lifetime: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +196,27 @@ fn main() -> Result<()> {
     println!("  Total Dropped:      {}", dropped);
     println!("  Reliability:        {:.2}%", reliability);
     println!("  Packet Loss Rate:   {:.2}%", 100.0 - reliability);
+
+    if let Some(lifetime) = args.lifetime {
+        let p = (100.0 - reliability) / 100.0;
+        println!("\nRequired RA frequency for reliability in {}s lifetime:", lifetime);
+        println!("  Probability | Interval (s) | Rate (RA/s)");
+        println!("  ------------|--------------|------------");
+
+        let targets = [0.99999, 0.9999, 0.999, 0.99, 0.95];
+        for &prob in &targets {
+            if p >= 1.0 {
+                println!("  {:.4}      | Impossible   | N/A", prob);
+            } else if p <= 0.0 {
+                println!("  {:.4}      | {:.4}       | {:.4}", prob, lifetime, 1.0 / lifetime);
+            } else {
+                let n = ((1.0_f64 - prob).ln() / p.ln()).ceil();
+                let interval = lifetime / n;
+                let rate = n / lifetime;
+                println!("  {:.3}%     | {:.4}      | {:.4}", prob * 100_f64, interval, rate);
+            }
+        }
+    }
 
     Ok(())
 }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use pcap_parser::{create_reader, PcapBlockOwned, Block, PcapError};
-use std::fs::File;
+use std::{fs::File, i64};
 use std::io::BufReader;
 use std::path::PathBuf;
 use number_prefix::{NumberPrefix, Prefix};
@@ -153,7 +153,9 @@ fn main() -> Result<()> {
     println!("------------------------------------------------------------");
 
     let total_sent = filtered_router.len();
-    let match_threshold_ns = 10_000_000; // 10ms threshold for matching packets
+    let match_threshold_ns = 1000_000_000_i64; // 10ms threshold for matching packets
+    // let match_threshold_ns = i64::MAX; // 10ms threshold for matching packets
+
 
     let mut received_count = 0;
     let mut device_idx = 0;

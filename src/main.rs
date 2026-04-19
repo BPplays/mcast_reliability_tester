@@ -7,6 +7,10 @@ use std::path::PathBuf;
 use number_prefix::{NumberPrefix, Prefix};
 use tabled::{Table, Tabled};
 use tabled;
+use rust_decimal::Decimal;
+use rust_decimal::prelude::FromPrimitive;
+use rust_decimal::MathematicalOps;
+use rust_decimal_macros::dec;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Multicast RA Reliability Tester")]
@@ -200,30 +204,53 @@ fn main() -> Result<()> {
 		.with(tabled::settings::Style::rounded());
 
 	if let Some(lifetime) = args.lifetime {
-		let p = (100.0 - reliability) / 100.0;
+		let lifetime = Decimal::from_f64(lifetime).unwrap();
+		let reliability = Decimal::from_f64(reliability).unwrap();
+
+		let p = (dec!(100.0) - reliability) / dec!(100.0);
 		println!("\nRequired RA frequency for reliability in {}s lifetime:", lifetime);
 
 		let mut rows = Vec::new();
-		let targets = [0.999999, 0.99999, 0.9999, 0.999, 0.99, 0.95];
+		let targets: Vec<Decimal> = vec![
+			dec!(0.999999),
+			dec!(0.99999),
+			dec!(0.9999),
+			dec!(0.999),
+			dec!(0.99),
+			dec!(0.95),
+		];
 		for &prob in &targets {
-			if p >= 1.0 {
+			let prob_percent = (prob * dec!(100.0)).normalize();
+			if p >= dec!(1.0) {
 				rows.push(ProbabilityRow {
-					probability: format!("{:.4}%", prob * 100.0),
+					probability: format!(
+						"{:.precision$}%",
+						prob_percent,
+						precision = prob_percent.scale() as usize,
+					),
 					interval: "Impossible".to_string(),
 					rate: "N/A".to_string(),
 				});
-			} else if p <= 0.0 {
+			} else if p <= dec!(0.0) {
 				rows.push(ProbabilityRow {
-					probability: format!("{:.4}%", prob * 100.0),
+					probability: format!(
+						"{:.precision$}%",
+						prob_percent,
+						precision = prob_percent.scale() as usize,
+					),
 					interval: format!("{:.4}s", lifetime),
-					rate: format!("{:.4} RA/s", 1.0 / lifetime),
+					rate: format!("{:.4} RA/s", dec!(1.0) / lifetime),
 				});
 			} else {
-				let n = ((1.0_f64 - prob).ln() / p.ln()).ceil();
+				let n = ((dec!(1.0) - prob).ln() / p.ln()).ceil();
 				let interval = lifetime / n;
 				let rate = n / lifetime;
 				rows.push(ProbabilityRow {
-					probability: format!("{:.4}%", prob * 100.0),
+					probability: format!(
+						"{:.precision$}%",
+						prob_percent,
+						precision = prob_percent.scale() as usize,
+					),
 					interval: format!("{:.4}s", interval),
 					rate: format!("{:.4} RA/s", rate),
 				});

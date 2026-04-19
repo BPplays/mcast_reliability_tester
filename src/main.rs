@@ -208,13 +208,13 @@ fn main() -> Result<()> {
 		for &prob in &targets {
 			if p >= 1.0 {
 				rows.push(ProbabilityRow {
-					probability: format!("{:.3}%", prob * 100.0),
+					probability: format!("{:.4}%", prob * 100.0),
 					interval: "Impossible".to_string(),
 					rate: "N/A".to_string(),
 				});
 			} else if p <= 0.0 {
 				rows.push(ProbabilityRow {
-					probability: format!("{}%", prob * 100.0),
+					probability: format!("{:.4}%", prob * 100.0),
 					interval: format!("{:.4}s", lifetime),
 					rate: format!("{:.4} RA/s", 1.0 / lifetime),
 				});
@@ -223,7 +223,7 @@ fn main() -> Result<()> {
 				let interval = lifetime / n;
 				let rate = n / lifetime;
 				rows.push(ProbabilityRow {
-					probability: format!("{:.3}%", prob * 100.0),
+					probability: format!("{:.4}%", prob * 100.0),
 					interval: format!("{:.4}s", interval),
 					rate: format!("{:.4} RA/s", rate),
 				});

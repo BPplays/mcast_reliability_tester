@@ -93,7 +93,15 @@ fn get_ra_packets(path: &PathBuf) -> Result<Vec<RaPacket>> {
                     let data = data.unwrap();
                     let ts_ns = ts_ns.unwrap();
                     if data.len() > 55 && data[12] == 0x86 && data[13] == 0xdd {
-                        if data[54] == 134 {
+                        // Filter for destination IPv6 ff02::1 (All-Nodes Multicast)
+                        // Destination address is at offset 14 (Eth) + 24 (IPv6) = 38
+                        let dst_addr = &data[38..54];
+                        let is_all_nodes = dst_addr[0] == 0xff
+                                        && dst_addr[1] == 0x02
+                                        && dst_addr[15] == 0x01
+                                        && dst_addr[2..15].iter().all(|&b| b == 0);
+
+                        if is_all_nodes && data[54] == 134 {
                             packets.push(RaPacket { timestamp_ns: ts_ns });
                         }
                     }
@@ -153,7 +161,7 @@ fn main() -> Result<()> {
     println!("------------------------------------------------------------");
 
     let total_sent = filtered_router.len();
-    let match_threshold_ns = 500_000_000_i64; // 10ms threshold for matching packets
+    let match_threshold_ns = 1500_000_000_i64; // 10ms threshold for matching packets
     // let match_threshold_ns = i64::MAX; // 10ms threshold for matching packets
 
 

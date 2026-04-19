@@ -153,7 +153,7 @@ fn main() -> Result<()> {
     println!("------------------------------------------------------------");
 
     let total_sent = filtered_router.len();
-    let match_threshold_ns = 1000_000_000_i64; // 10ms threshold for matching packets
+    let match_threshold_ns = 500_000_000_i64; // 10ms threshold for matching packets
     // let match_threshold_ns = i64::MAX; // 10ms threshold for matching packets
 
 

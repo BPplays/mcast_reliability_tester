@@ -1,8 +1,11 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use pcap_parser::{create_reader, PcapBlockOwned, Block};
+use pcap_parser::{create_reader, PcapBlockOwned, Block, PcapError};
 use std::fs::File;
+use std::io::BufReader;
 use std::path::PathBuf;
+use number_prefix::{NumberPrefix, Prefix};
+use scopeguard;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Multicast RA Reliability Tester")]
@@ -25,59 +28,95 @@ struct RaPacket {
     timestamp_ns: u64,
 }
 
+fn prefix_name(prefix: Prefix) -> &'static str {
+    match prefix {
+        Prefix::Kilo => "kiloblocks",
+        Prefix::Mega => "megablocks",
+        Prefix::Giga => "gigablocks",
+        Prefix::Tera => "terablocks",
+        Prefix::Peta => "petablocks",
+        Prefix::Exa => "exablocks",
+        _ => "blocks",
+    }
+}
+
+fn format_blocks(count: u64) -> String {
+    match NumberPrefix::decimal(count as f64) {
+        NumberPrefix::Standalone(n) => format!("{n:.0} blocks"),
+        NumberPrefix::Prefixed(prefix, n) => {
+            format!("{n:.2} {}", prefix_name(prefix))
+        }
+    }
+}
+
 fn get_ra_packets(path: &PathBuf) -> Result<Vec<RaPacket>> {
     let file = File::open(path).with_context(|| format!("Failed to open file {:?}", path))?;
-    let mut reader = create_reader(65536, file)
+    let buffered_reader = BufReader::new(file);
+    let mut reader = create_reader(65536, buffered_reader)
         .with_context(|| format!("Failed to create reader for {:?}", path))?;
 
     let mut packets = Vec::new();
+    let mut count = 0;
 
     loop {
         match reader.next() {
-            Ok((_offset, block)) => {
-                let (data, ts_ns) = match block {
+            Ok((offset, block)) => {
+                let mut skip = false;
+                count += 1;
+                if count % 10000000 == 0 {
+                    println!("Reading {:?}... processed {}; offset: {}", path, format_blocks(count), offset);
+                }
+
+                let (data, ts_ns): (Option<&[u8]>, Option<u64>) = match block {
                     PcapBlockOwned::Legacy(legacy_block) => {
                         let ns = (legacy_block.ts_sec as u64 * 1_000_000_000) + (legacy_block.ts_usec as u64 * 1_000);
-                        (legacy_block.data, ns)
+                        (Some(legacy_block.data), Some(ns))
                     }
                     PcapBlockOwned::NG(ng_block) => {
+
                         if let Block::EnhancedPacket(epb) = ng_block {
                             let ns = (epb.ts_high as u64 * 1_000_000_000) + (epb.ts_low as u64);
-                            (epb.data, ns)
+                            (Some(epb.data), Some(ns))
                         } else {
-                            continue;
+                            skip = true;
+                            (None, None)
                         }
                     }
-                    _ => continue,
+                    _ => {
+                        skip = true;
+                        (None, None)
+                    },
                 };
 
-                // The packet data usually includes the Ethernet header (14 bytes).
-                // IPv6 header follows (40 bytes).
-                // ICMPv6 Type is the first byte of the ICMPv6 header.
-                // Total offset: 14 + 40 = 54.
-                if data.len() > 55 && data[12] == 0x86 && data[13] == 0xdd {
-                    if data[54] == 134 {
-                       packets.push(RaPacket { timestamp_ns: ts_ns });
+
+                if !skip && !data.is_none() && !ts_ns.is_none() {
+                    let data = data.unwrap();
+                    let ts_ns = ts_ns.unwrap();
+                    if data.len() > 55 && data[12] == 0x86 && data[13] == 0xdd {
+                        if data[54] == 134 {
+                            packets.push(RaPacket { timestamp_ns: ts_ns });
+                        }
                     }
                 }
+
+                reader.consume(offset);
             }
-            Err(e) => {
-                println!("error reading: {}", e);
-                // break on EOF or errors
-                break;
-            }
+            Err(PcapError::Eof) => break,
+            Err(PcapError::Incomplete(_)) => {
+                reader.refill().unwrap();
+            },
+            Err(e) => panic!("error while reading: {:?}", e),
         }
     }
+    println!("Finished reading {:?}: found {} RA packets", path, packets.len());
     Ok(packets)
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    println!("start get ra");
     let router_packets = get_ra_packets(&args.router_pcap)?;
     let device_packets = get_ra_packets(&args.device_pcap)?;
-    println!("finished get ra");
 
     if router_packets.is_empty() || device_packets.is_empty() {
         anyhow::bail!("No RA packets found in one or both files");
@@ -111,26 +150,32 @@ fn main() -> Result<()> {
     println!("  Start: {} ns", start_window);
     println!("  End:   {} ns", end_window);
     println!("  Duration: {} ms", (end_window - start_window) / 1_000_000);
-    println!("-------------------------------------------------------");
+    println!("------------------------------------------------------------");
 
     let total_sent = filtered_router.len();
-    let mut received_count = 0;
     let match_threshold_ns = 10_000_000; // 10ms threshold for matching packets
 
-    let mut device_used = vec![false; filtered_device.len()];
+    let mut received_count = 0;
+    let mut device_idx = 0;
 
+    // O(N + M) Two-pointer matching algorithm
     for rp in &filtered_router {
-        for (i, dp) in filtered_device.iter().enumerate() {
-            if !device_used[i] && (rp.timestamp_ns as i64 - dp.timestamp_ns as i64).abs() < match_threshold_ns as i64 {
-                received_count += 1;
-                device_used[i] = true;
-                break;
-            }
+        // Advance device pointer to the start of the potential match window
+        while device_idx < filtered_device.len() &&
+              (filtered_device[device_idx].timestamp_ns as i64 - rp.timestamp_ns as i64) < -(match_threshold_ns as i64) {
+            device_idx += 1;
+        }
+
+        // Check if the current device packet matches the router packet
+        if device_idx < filtered_device.len() &&
+           (rp.timestamp_ns as i64 - filtered_device[device_idx].timestamp_ns as i64).abs() < match_threshold_ns as i64 {
+            received_count += 1;
+            device_idx += 1; // Consume this packet
         }
     }
 
     let dropped = total_sent - received_count;
-    let reliability = (received_count as f64 / total_sent as f64) * 100.0;
+    let reliability = if total_sent > 0 { (received_count as f64 / total_sent as f64) * 100.0 } else { 0.0 };
 
     println!("Results:");
     println!("  Total RAs Sent:     {}", total_sent);

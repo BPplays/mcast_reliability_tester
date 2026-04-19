@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use pcap_parser::{create_reader, PcapBlockOwned, Block, PcapError};
 use std::{fs::File, i64};
@@ -132,7 +132,7 @@ fn get_ra_packets(path: &PathBuf) -> Result<Vec<RaPacket>> {
 	Ok(packets)
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<(), anyhow::Error> {
 	let args = Args::parse();
 
 	let router_packets = get_ra_packets(&args.router_pcap)?;
@@ -206,6 +206,9 @@ fn main() -> Result<()> {
 	if let Some(lifetime) = args.lifetime {
 		let lifetime = Decimal::from_f64(lifetime).unwrap();
 		let reliability = Decimal::from_f64(reliability).unwrap();
+		if lifetime.is_zero() {
+			return Err(anyhow!("lifetime can't be 0"));
+		}
 
 		let p = (dec!(100.0) - reliability) / dec!(100.0);
 		println!("\nRequired RA frequency for reliability in {}s lifetime:", lifetime);

@@ -1,11 +1,10 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use clap::Parser;
 use pcap_parser::{create_reader, PcapBlockOwned, Block, PcapError};
 use std::{fs::File, i64};
 use std::io::BufReader;
 use std::path::PathBuf;
 use number_prefix::{NumberPrefix, Prefix};
-use scopeguard;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Multicast RA Reliability Tester")]

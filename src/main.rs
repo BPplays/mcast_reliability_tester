@@ -204,7 +204,7 @@ fn main() -> Result<()> {
 		println!("\nRequired RA frequency for reliability in {}s lifetime:", lifetime);
 
 		let mut rows = Vec::new();
-		let targets = [0.99999, 0.9999, 0.999, 0.99, 0.95];
+		let targets = [0.999999, 0.99999, 0.9999, 0.999, 0.99, 0.95];
 		for &prob in &targets {
 			if p >= 1.0 {
 				rows.push(ProbabilityRow {
@@ -214,7 +214,7 @@ fn main() -> Result<()> {
 				});
 			} else if p <= 0.0 {
 				rows.push(ProbabilityRow {
-					probability: format!("{:.3}%", prob * 100.0),
+					probability: format!("{}%", prob * 100.0),
 					interval: format!("{:.4}s", lifetime),
 					rate: format!("{:.4} RA/s", 1.0 / lifetime),
 				});

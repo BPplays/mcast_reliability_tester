@@ -5,6 +5,7 @@ use std::{fs::File, i64};
 use std::io::BufReader;
 use std::path::PathBuf;
 use number_prefix::{NumberPrefix, Prefix};
+use tabled::{Table, Tabled};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Multicast RA Reliability Tester")]
@@ -29,6 +30,13 @@ struct Args {
 #[derive(Debug, Clone)]
 struct RaPacket {
     timestamp_ns: u64,
+}
+
+#[derive(Tabled)]
+struct ProbabilityRow {
+    probability: String,
+    interval: String,
+    rate: String,
 }
 
 fn prefix_name(prefix: Prefix) -> &'static str {
@@ -76,7 +84,6 @@ fn get_ra_packets(path: &PathBuf) -> Result<Vec<RaPacket>> {
                         (Some(legacy_block.data), Some(ns))
                     }
                     PcapBlockOwned::NG(ng_block) => {
-
                         if let Block::EnhancedPacket(epb) = ng_block {
                             let ns = (epb.ts_high as u64 * 1_000_000_000) + (epb.ts_low as u64);
                             (Some(epb.data), Some(ns))
@@ -91,18 +98,15 @@ fn get_ra_packets(path: &PathBuf) -> Result<Vec<RaPacket>> {
                     },
                 };
 
-
-                if !skip && !data.is_none() && !ts_ns.is_none() {
+                if !skip && data.is_some() && ts_ns.is_some() {
                     let data = data.unwrap();
                     let ts_ns = ts_ns.unwrap();
                     if data.len() > 55 && data[12] == 0x86 && data[13] == 0xdd {
-                        // Filter for destination IPv6 ff02::1 (All-Nodes Multicast)
-                        // Destination address is at offset 14 (Eth) + 24 (IPv6) = 38
                         let dst_addr = &data[38..54];
                         let is_all_nodes = dst_addr[0] == 0xff
-                                        && dst_addr[1] == 0x02
-                                        && dst_addr[15] == 0x01
-                                        && dst_addr[2..15].iter().all(|&b| b == 0);
+                                         && dst_addr[1] == 0x02
+                                         && dst_addr[15] == 0x01
+                                         && dst_addr[2..15].iter().all(|&b| b == 0);
 
                         if is_all_nodes && data[54] == 134 {
                             packets.push(RaPacket { timestamp_ns: ts_ns });
@@ -164,26 +168,21 @@ fn main() -> Result<()> {
     println!("------------------------------------------------------------");
 
     let total_sent = filtered_router.len();
-    let match_threshold_ns = 1500_000_000_i64; // 10ms threshold for matching packets
-    // let match_threshold_ns = i64::MAX; // 10ms threshold for matching packets
-
+    let match_threshold_ns = 1500_000_000_i64;
 
     let mut received_count = 0;
     let mut device_idx = 0;
 
-    // O(N + M) Two-pointer matching algorithm
     for rp in &filtered_router {
-        // Advance device pointer to the start of the potential match window
         while device_idx < filtered_device.len() &&
               (filtered_device[device_idx].timestamp_ns as i64 - rp.timestamp_ns as i64) < -(match_threshold_ns as i64) {
             device_idx += 1;
         }
 
-        // Check if the current device packet matches the router packet
         if device_idx < filtered_device.len() &&
            (rp.timestamp_ns as i64 - filtered_device[device_idx].timestamp_ns as i64).abs() < match_threshold_ns as i64 {
             received_count += 1;
-            device_idx += 1; // Consume this packet
+            device_idx += 1;
         }
     }
 
@@ -200,22 +199,34 @@ fn main() -> Result<()> {
     if let Some(lifetime) = args.lifetime {
         let p = (100.0 - reliability) / 100.0;
         println!("\nRequired RA frequency for reliability in {}s lifetime:", lifetime);
-        println!("  Probability | Interval (s) | Rate (RA/s)");
-        println!("  ------------|--------------|------------");
 
+        let mut rows = Vec::new();
         let targets = [0.99999, 0.9999, 0.999, 0.99, 0.95];
         for &prob in &targets {
             if p >= 1.0 {
-                println!("  {:.4}      | Impossible   | N/A", prob);
+                rows.push(ProbabilityRow {
+                    probability: format!("{:.3}%", prob * 100.0),
+                    interval: "Impossible".to_string(),
+                    rate: "N/A".to_string(),
+                });
             } else if p <= 0.0 {
-                println!("  {:.4}      | {:.4}       | {:.4}", prob, lifetime, 1.0 / lifetime);
+                rows.push(ProbabilityRow {
+                    probability: format!("{:.3}%", prob * 100.0),
+                    interval: format!("{:.4}s", lifetime),
+                    rate: format!("{:.4} RA/s", 1.0 / lifetime),
+                });
             } else {
                 let n = ((1.0_f64 - prob).ln() / p.ln()).ceil();
                 let interval = lifetime / n;
                 let rate = n / lifetime;
-                println!("  {:.3}%     | {:.4}      | {:.4}", prob * 100_f64, interval, rate);
+                rows.push(ProbabilityRow {
+                    probability: format!("{:.3}%", prob * 100.0),
+                    interval: format!("{:.4}s", interval),
+                    rate: format!("{:.4} RA/s", rate),
+                });
             }
         }
+        println!("{}", Table::new(rows).to_string());
     }
 
     Ok(())

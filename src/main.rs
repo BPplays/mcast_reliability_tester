@@ -24,7 +24,7 @@ struct Args {
 	device_pcap: PathBuf,
 
 	/// Margin in milliseconds around the start and end times to avoid miscounting
-	#[arg(short, long, default_value = "1000")]
+	#[arg(short, long, default_value = "2500")]
 	margin: u64,
 
 	/// RA Lifetime in seconds
@@ -173,7 +173,8 @@ fn main() -> Result<(), anyhow::Error> {
 	println!("------------------------------------------------------------");
 
 	let total_sent = filtered_router.len();
-	let match_threshold_ns = 1500_000_000_i64;
+	// let match_threshold_ns = 1500_000_000_i64;
+	let match_threshold_ns = margin_ns;
 
 	let mut received_count = 0;
 	let mut device_idx = 0;

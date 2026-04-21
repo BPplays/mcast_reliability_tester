@@ -216,6 +216,7 @@ fn main() -> Result<(), anyhow::Error> {
 
 		let mut rows = Vec::new();
 		let targets: Vec<Decimal> = vec![
+			dec!(0.99999999),
 			dec!(0.9999999),
 			dec!(0.999999),
 			dec!(0.99999),
